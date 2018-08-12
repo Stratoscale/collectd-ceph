@@ -32,7 +32,8 @@
 import collectd
 import json
 import traceback
-import subprocess
+#import subprocess
+import requests
 
 import base
 
@@ -53,8 +54,11 @@ class CephOsdPlugin(base.Base):
         } }
         output = None
         try:
-            cephosdcmdline='ceph osd dump --format json --cluster ' + self.cluster
-            output = subprocess.check_output(cephosdcmdline, shell=True)
+            response = requests.get("http://127.0.0.1:7766/api/v0.1/osd/dump",
+                    headers={"Accept":"application/json"})
+            #cephosdcmdline='ceph osd dump --format json --cluster ' + self.cluster
+            #output = subprocess.check_output(cephosdcmdline, shell=True)
+            output = response.json()
         except Exception as exc:
             collectd.error("ceph-osd: failed to ceph osd dump :: %s :: %s"
                     % (exc, traceback.format_exc()))
@@ -63,7 +67,8 @@ class CephOsdPlugin(base.Base):
         if output is None:
             collectd.error('ceph-osd: failed to ceph osd dump :: output was None')
 
-        json_data = json.loads(output)
+        json_data = output['output']
+        #json_data = json.loads(output)
 
         # number of pools
         data[ceph_cluster]['pool']['number'] = len(json_data['pools'])
