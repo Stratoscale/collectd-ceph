@@ -36,6 +36,7 @@ import subprocess
 
 import base
 
+
 class CephOsdPlugin(base.Base):
 
     def __init__(self):
@@ -47,17 +48,17 @@ class CephOsdPlugin(base.Base):
 
         ceph_cluster = "%s-%s" % (self.prefix, self.cluster)
 
-        data = { ceph_cluster: { 
-            'pool': { 'number': 0 },
-            'osd': { 'up': 0, 'in': 0, 'down': 0, 'out': 0} 
-        } }
+        data = {ceph_cluster: {
+            'pool': {'number': 0},
+            'osd': {'up': 0, 'in': 0, 'down': 0, 'out': 0}
+        }}
         output = None
         try:
-            cephosdcmdline='ceph osd dump --format json --cluster ' + self.cluster
+            cephosdcmdline = 'ceph osd dump --format json --cluster ' + self.cluster
             output = subprocess.check_output(cephosdcmdline, shell=True)
         except Exception as exc:
             collectd.error("ceph-osd: failed to ceph osd dump :: %s :: %s"
-                    % (exc, traceback.format_exc()))
+                           % (exc, traceback.format_exc()))
             return
 
         if output is None:
@@ -87,23 +88,26 @@ class CephOsdPlugin(base.Base):
                 osd_data['in'] += 1
             else:
                 osd_data['out'] += 1
-    
+
         return data
+
 
 try:
     plugin = CephOsdPlugin()
 except Exception as exc:
     collectd.error("ceph-osd: failed to initialize ceph osd plugin :: %s :: %s"
-            % (exc, traceback.format_exc()))
+                   % (exc, traceback.format_exc()))
+
 
 def configure_callback(conf):
     """Received configuration information"""
     plugin.config_callback(conf)
 
+
 def read_callback():
     """Callback triggerred by collectd on read"""
     plugin.read_callback()
 
+
 collectd.register_config(configure_callback)
 collectd.register_read(read_callback, plugin.interval)
-
