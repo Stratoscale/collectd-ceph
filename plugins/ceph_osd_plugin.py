@@ -33,6 +33,7 @@ import collectd
 import json
 import traceback
 import subprocess
+import requests
 
 import base
 
@@ -45,40 +46,41 @@ class CephOsdPlugin(base.Base):
 
     def get_stats(self):
         """Retrieves stats from ceph osds"""
+        json_data = None
 
         ceph_cluster = "%s-%s" % (self.prefix, self.cluster)
-
         data = {ceph_cluster: {
             'pool': {'number': 0},
             'osd': {'up': 0, 'in': 0, 'down': 0, 'out': 0}
         }}
-        output = None
         try:
-            cephosdcmdline = 'ceph osd dump --format json --cluster ' + self.cluster
-            output = subprocess.check_output(cephosdcmdline, shell=True)
+            if self.rest:
+                json_data = self.get_stats_via_rest()
+            else:
+                json_data = self.get_stats_via_tool()
         except Exception as exc:
             collectd.error("ceph-osd: failed to ceph osd dump :: %s :: %s"
                            % (exc, traceback.format_exc()))
             return
 
-        if output is None:
+        if json_data is None:
             collectd.error('ceph-osd: failed to ceph osd dump :: output was None')
+            return
 
-        json_data = json.loads(output)
-
-        # number of pools
+        # Number of pools
         data[ceph_cluster]['pool']['number'] = len(json_data['pools'])
 
-        # pool metadata
+        # Pool metadata
         for pool in json_data['pools']:
-            pool_name = "pool-%s" % pool['pool_name']
-            data[ceph_cluster][pool_name] = {}
-            data[ceph_cluster][pool_name]['size'] = pool['size']
-            data[ceph_cluster][pool_name]['pg_num'] = pool['pg_num']
-            data[ceph_cluster][pool_name]['pgp_num'] = pool['pg_placement_num']
+            data[ceph_cluster]["pool-%s" % pool['pool_name']] = {
+                'size': pool['size'],
+                'pg_num': pool['pg_num'],
+                'pgp_num': pool['pg_placement_num'],
+            }
 
         osd_data = data[ceph_cluster]['osd']
-        # number of osds in each possible state
+
+        # Number of osds in each possible state
         for osd in json_data['osds']:
             if osd['up'] == 1:
                 osd_data['up'] += 1
@@ -90,6 +92,24 @@ class CephOsdPlugin(base.Base):
                 osd_data['out'] += 1
 
         return data
+
+    def get_stats_via_tool(self):
+        """Retrieves stats using a subprocess."""
+        raw_output = subprocess.check_output(
+            ['ceph', 'osd', 'dump', '--format', 'json', '--cluster ', self.cluster])
+        return json.loads(raw_output)
+
+    def get_stats_via_rest(self):
+        """Retrieves stats using a request."""
+        response = requests.get(
+            "http://{host}:{port}/api/v0.1/osd/dump".format(
+                host=self.host,
+                port=self.port
+            ),
+            headers={"Accept": "application/json"}
+        )
+        response.raise_for_status()
+        return response.json()["output"]
 
 
 try:
@@ -105,7 +125,7 @@ def configure_callback(conf):
 
 
 def read_callback():
-    """Callback triggerred by collectd on read"""
+    """Callback triggered by collectd on read"""
     plugin.read_callback()
 
 

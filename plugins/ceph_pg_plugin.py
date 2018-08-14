@@ -31,8 +31,10 @@ import collectd
 import json
 import traceback
 import subprocess
+import requests
 
 import base
+
 
 class CephPGPlugin(base.Base):
 
@@ -42,59 +44,82 @@ class CephPGPlugin(base.Base):
 
     def get_stats(self):
         """Retrieves stats from ceph pgs"""
+        json_data = None
 
         ceph_cluster = "%s-%s" % (self.prefix, self.cluster)
 
-        data = { ceph_cluster: { 'pg': { } }  }
-        output = None
+        data = {ceph_cluster: {'pg': {}}}
         try:
-            cephpg_cmdline='ceph pg dump --format json --cluster '+ self.cluster
-            output = subprocess.check_output(cephpg_cmdline, shell=True)
+            if self.rest:
+                json_data = self.get_stats_via_rest()
+            else:
+                json_data = self.get_stats_via_tool()
         except Exception as exc:
             collectd.error("ceph-pg: failed to ceph pg dump :: %s :: %s"
-                    % (exc, traceback.format_exc()))
+                           % (exc, traceback.format_exc()))
             return
 
-        if output is None:
+        if json_data is None:
             collectd.error('ceph-pg: failed to ceph osd dump :: output was None')
-
-        json_data = json.loads(output)
+            return
 
         pg_data = data[ceph_cluster]['pg']
-        # number of pgs in each possible state
+
+        # Number of pgs in each possible state
         for pg in json_data['pg_stats']:
             for state in pg['state'].split('+'):
-                if not pg_data.has_key(state):
+                if state not in pg_data:
                     pg_data[state] = 0
                 pg_data[state] += 1
-    
+
         # osd perf data
         for osd in json_data['osd_stats']:
-            osd_id = "osd-%s" % osd['osd']
-            data[ceph_cluster][osd_id] = {}
-            data[ceph_cluster][osd_id]['kb_used'] = osd['kb_used']
-            data[ceph_cluster][osd_id]['kb_total'] = osd['kb']
-            data[ceph_cluster][osd_id]['snap_trim_queue_len'] = osd['snap_trim_queue_len']
-            data[ceph_cluster][osd_id]['num_snap_trimming'] = osd['num_snap_trimming']
-            data[ceph_cluster][osd_id]['apply_latency_ms'] = osd['fs_perf_stat']['apply_latency_ms']
-            data[ceph_cluster][osd_id]['commit_latency_ms'] = osd['fs_perf_stat']['commit_latency_ms']
+            data[ceph_cluster]["osd-%s" % osd['osd']] = {
+                'kb_total':  osd['kb'],
+                'kb_used': osd['kb_used'],
+                'num_snap_trimming':  osd['num_snap_trimming'],
+                'snap_trim_queue_len': osd['snap_trim_queue_len'],
+                'apply_latency_ms':  osd['fs_perf_stat']['apply_latency_ms'],
+                'commit_latency_ms':  osd['fs_perf_stat']['commit_latency_ms'],
+            }
 
         return data
+
+    def get_stats_via_tool(self):
+        """Retrieves stats using a subprocess."""
+        raw_output = subprocess.check_output(
+            ['ceph', 'pg', 'dump', '--format', 'json', '--cluster ', self.cluster])
+        return json.loads(raw_output)
+
+    def get_stats_via_rest(self):
+        """Retrieves stats using a request."""
+        response = requests.get(
+            "http://{host}:{port}/api/v0.1/pg/dump".format(
+                host=self.host,
+                port=self.port
+            ),
+            headers={"Accept": "application/json"}
+        )
+        response.raise_for_status()
+        return response.json()["output"]
+
 
 try:
     plugin = CephPGPlugin()
 except Exception as exc:
     collectd.error("ceph-pg: failed to initialize ceph pg plugin :: %s :: %s"
-            % (exc, traceback.format_exc()))
+                   % (exc, traceback.format_exc()))
+
 
 def configure_callback(conf):
     """Received configuration information"""
     plugin.config_callback(conf)
 
+
 def read_callback():
-    """Callback triggerred by collectd on read"""
+    """Callback triggered by collectd on read"""
     plugin.read_callback()
+
 
 collectd.register_config(configure_callback)
 collectd.register_read(read_callback, plugin.interval)
-

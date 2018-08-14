@@ -35,6 +35,7 @@ import subprocess
 
 import base
 
+
 class CephLatencyPlugin(base.Base):
 
     def __init__(self):
@@ -46,15 +47,16 @@ class CephLatencyPlugin(base.Base):
 
         ceph_cluster = "%s-%s" % (self.prefix, self.cluster)
 
-        data = { ceph_cluster: {} }
+        data = {ceph_cluster: {}}
 
         output = None
         try:
             output = subprocess.check_output(
-              "timeout 30s rados --cluster "+ self.cluster +" -p data bench 10 write -t 1 -b 65536 2>/dev/null | grep -i latency | awk '{print 1000*$3}'", shell=True)
+                "timeout 30s rados --cluster " + self.cluster + " -p data bench 10 write -t 1 -b 65536 2>/dev/null | grep -i latency | awk '{print 1000*$3}'",
+                shell=True)
         except Exception as exc:
             collectd.error("ceph-latency: failed to run rados bench :: %s :: %s"
-                    % (exc, traceback.format_exc()))
+                           % (exc, traceback.format_exc()))
             return
 
         if output is None:
@@ -62,28 +64,32 @@ class CephLatencyPlugin(base.Base):
 
         results = output.split('\n')
         # push values
-        data[ceph_cluster]['cluster'] = {}
-        data[ceph_cluster]['cluster']['avg_latency'] = results[0]
-        data[ceph_cluster]['cluster']['stddev_latency'] = results[1]
-        data[ceph_cluster]['cluster']['max_latency'] = results[2]
-        data[ceph_cluster]['cluster']['min_latency'] = results[3]
+        data[ceph_cluster]['cluster'] = {
+            'avg_latency': results[0],
+            'stddev_latency': results[1],
+            'max_latency': results[2],
+            'min_latency': results[3],
+        }
 
         return data
+
 
 try:
     plugin = CephLatencyPlugin()
 except Exception as exc:
     collectd.error("ceph-latency: failed to initialize ceph latency plugin :: %s :: %s"
-            % (exc, traceback.format_exc()))
+                   % (exc, traceback.format_exc()))
+
 
 def configure_callback(conf):
     """Received configuration information"""
     plugin.config_callback(conf)
 
+
 def read_callback():
-    """Callback triggerred by collectd on read"""
+    """Callback triggered by collectd on read"""
     plugin.read_callback()
+
 
 collectd.register_config(configure_callback)
 collectd.register_read(read_callback, plugin.interval)
-
