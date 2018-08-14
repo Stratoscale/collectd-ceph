@@ -36,10 +36,13 @@ class Base(object):
     def __init__(self):
         self.verbose = False
         self.debug = False
+        self.rest = False
         self.prefix = ''
         self.cluster = 'ceph'
         self.testpool = 'test'
         self.interval = 60.0
+        self.host = '127.0.0.1'
+        self.port = 7766
 
     def config_callback(self, conf):
         """Takes a collectd conf object and fills in the local config."""
@@ -50,6 +53,13 @@ class Base(object):
             elif node.key == "Debug":
                 if node.values[0] in ['True', 'true']:
                     self.debug = True
+            elif node.key == "Rest":
+                if node.values[0] in ['True', 'true']:
+                    self.rest = True
+            elif node.key == "Host":
+                self.host = node.values[0]
+            elif node.key == "Port":
+                self.port = node.values[0]
             elif node.key == "Prefix":
                 self.prefix = node.values[0]
             elif node.key == 'Cluster':

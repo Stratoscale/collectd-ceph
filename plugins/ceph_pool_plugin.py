@@ -33,8 +33,10 @@ import collectd
 import json
 import traceback
 import subprocess
+import requests
 
 import base
+
 
 class CephPoolPlugin(base.Base):
 
@@ -47,71 +49,109 @@ class CephPoolPlugin(base.Base):
 
         ceph_cluster = "%s-%s" % (self.prefix, self.cluster)
 
-        data = { ceph_cluster: {} }
+        data = {ceph_cluster: {}}
 
-        stats_output = None
+        pool_stats_json = df_json = None
         try:
-            osd_pool_cmdline='ceph osd pool stats -f json --cluster ' + self.cluster
-            stats_output = subprocess.check_output(osd_pool_cmdline, shell=True)
-            cephdf_cmdline='ceph df -f json --cluster ' + self.cluster 
-            df_output = subprocess.check_output(ceph_dfcmdline, shell=True)
+            if self.rest:
+                pool_stats_json, df_json = self.get_stats_via_rest()
+            else:
+                pool_stats_json, df_json = self.get_stats_via_tool()
+
         except Exception as exc:
             collectd.error("ceph-pool: failed to ceph pool stats :: %s :: %s"
-                    % (exc, traceback.format_exc()))
+                           % (exc, traceback.format_exc()))
             return
 
-        if stats_output is None:
+        if pool_stats_json is None:
             collectd.error('ceph-pool: failed to ceph osd pool stats :: output was None')
+            return
 
-        if df_output is None:
+        if df_json is None:
             collectd.error('ceph-pool: failed to ceph df :: output was None')
+            return
 
-        json_stats_data = json.loads(stats_output)
-        json_df_data = json.loads(df_output)
-
-        # push osd pool stats results
-        for pool in json_stats_data:
+        # Push osd pool stats results
+        for pool in pool_stats_json:
             pool_key = "pool-%s" % pool['pool_name']
             data[ceph_cluster][pool_key] = {}
-            pool_data = data[ceph_cluster][pool_key] 
+            pool_data = data[ceph_cluster][pool_key]
             for stat in ('read_bytes_sec', 'write_bytes_sec', 'op_per_sec'):
-                pool_data[stat] = pool['client_io_rate'][stat] if pool['client_io_rate'].has_key(stat) else 0
+                pool_data[stat] = pool['client_io_rate'][stat] if stat in pool['client_io_rate'] else 0
 
-        # push df results
-        for pool in json_df_data['pools']:
+        # Push df results
+        for pool in df_json['pools']:
             pool_data = data[ceph_cluster]["pool-%s" % pool['name']]
             for stat in ('bytes_used', 'kb_used', 'objects'):
-                pool_data[stat] = pool['stats'][stat] if pool['stats'].has_key(stat) else 0
+                pool_data[stat] = pool['stats'][stat] if stat in pool['stats'] else 0
 
-        # push totals from df
+        # Push totals from df
         data[ceph_cluster]['cluster'] = {}
-        if json_df_data['stats'].has_key('total_bytes'):
-            # ceph 0.84+
-            data[ceph_cluster]['cluster']['total_space'] = int(json_df_data['stats']['total_bytes'])
-            data[ceph_cluster]['cluster']['total_used'] = int(json_df_data['stats']['total_used_bytes'])
-            data[ceph_cluster]['cluster']['total_avail'] = int(json_df_data['stats']['total_avail_bytes'])
+        if 'total_bytes' in df_json['stats']:
+            # Ceph 0.84+
+            data[ceph_cluster]['cluster']['total_space'] = int(df_json['stats']['total_bytes'])
+            data[ceph_cluster]['cluster']['total_used'] = int(df_json['stats']['total_used_bytes'])
+            data[ceph_cluster]['cluster']['total_avail'] = int(df_json['stats']['total_avail_bytes'])
         else:
-            # ceph < 0.84
-            data[ceph_cluster]['cluster']['total_space'] = int(json_df_data['stats']['total_space']) * 1024.0
-            data[ceph_cluster]['cluster']['total_used'] = int(json_df_data['stats']['total_used']) * 1024.0
-            data[ceph_cluster]['cluster']['total_avail'] = int(json_df_data['stats']['total_avail']) * 1024.0
+            # Ceph < 0.84
+            data[ceph_cluster]['cluster']['total_space'] = int(df_json['stats']['total_space']) * 1024.0
+            data[ceph_cluster]['cluster']['total_used'] = int(df_json['stats']['total_used']) * 1024.0
+            data[ceph_cluster]['cluster']['total_avail'] = int(df_json['stats']['total_avail']) * 1024.0
 
         return data
+
+    def get_stats_via_tool(self):
+        """Retrieves stats using subprocess commands."""
+        raw_output = subprocess.check_output(
+            ['ceph', 'osd', 'pool', 'stats', '-f', 'json', '--cluster ', self.cluster])
+        pool_stats_json = json.loads(raw_output)
+
+        raw_output = subprocess.check_output(
+            ['ceph', 'df', '-f', 'json', '--cluster ', self.cluster])
+        df_json = json.loads(raw_output)
+
+        return pool_stats_json, df_json
+
+    def get_stats_via_rest(self):
+        """Retrieves stats using requests."""
+        response = requests.get(
+            "http://{host}:{port}/api/v0.1/df".format(
+                host=self.host,
+                port=self.port
+            ),
+            headers={"Accept": "application/json"}
+        )
+        response.raise_for_status()
+        df_json = response.json()["output"]
+
+        response = requests.get(
+            "http://{host}:{port}/api/v0.1/osd/pool/stats".format(
+                host=self.host,
+                port=self.port
+            ),
+            headers={"Accept": "application/json"}
+        )
+        response.raise_for_status()
+        pool_stats_json = response.json()["output"]
+
+        return pool_stats_json, df_json
 
 try:
     plugin = CephPoolPlugin()
 except Exception as exc:
     collectd.error("ceph-pool: failed to initialize ceph pool plugin :: %s :: %s"
-            % (exc, traceback.format_exc()))
+                   % (exc, traceback.format_exc()))
+
 
 def configure_callback(conf):
     """Received configuration information"""
     plugin.config_callback(conf)
 
+
 def read_callback():
-    """Callback triggerred by collectd on read"""
+    """Callback triggered by collectd on read"""
     plugin.read_callback()
+
 
 collectd.register_config(configure_callback)
 collectd.register_read(read_callback, plugin.interval)
-
